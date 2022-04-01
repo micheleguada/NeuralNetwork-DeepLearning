@@ -127,3 +127,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+
+# my files to ignore
+HW2-UnsupervisedLearning/Dataset/
+HW2-UnsupervisedLearning/Checkpoints/
+HW2-UnsupervisedLearning/Results/
