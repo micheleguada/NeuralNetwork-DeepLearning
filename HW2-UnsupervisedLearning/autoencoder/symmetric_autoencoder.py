@@ -92,12 +92,16 @@ class SymmetricAutoencoder(pl.LightningModule):
         
         val_loss = nn.functional.mse_loss(input=gen, target=orig)
         self.log("val_loss", val_loss.item(), on_step=False, on_epoch=True, prog_bar=True)
-
+        return val_loss
+    
+    def validation_epoch_end(self, outputs):
+        val_loss = torch.stack(outputs).mean()
+        
         # store minimum reached validation loss
         if (self.min_val_loss is None) or (self.min_val_loss > val_loss.item()):
             self.min_val_loss = val_loss.item()
             self.log("min_val_loss", self.min_val_loss, on_step=False, on_epoch=True)
-        return
+        return    
     
     def test_step(self, batch, batch_idx):
         # test loss
@@ -172,6 +176,19 @@ class SymmetricAutoencoderHPS(BaseHPS):
         n_configs = len(self.hp_space["conv_configs"])
         conv_config_id = trial.suggest_categorical( "conv_config_id", list(range(n_configs)) )
         conv_config = self.hp_space["conv_configs"][conv_config_id]
+        
+        # DANGER qui voglio modificare il modo in cui faccio il sampling, ma non so come ????? DANGER
+        #n_conv_layers = len(conv_config)
+        #channel_1st = trial.suggest_int("channels_0", 
+                                        #self.hp_space["channels_range"][0], 
+                                        #self.hp_space["channels_range"][1],
+                                        #step = self.hp_space["channels_range"][2],
+                                       #) 
+        
+        #channel_f = []
+        #for layer_id in range(1,n_conv_layers):
+            #channel_f.append( trial.suggest_int(f"channel_factor_{layer_id}", 1, 2) )
+        
         channels = [trial.suggest_int(f"channels_{ii}", 
                                       self.hp_space["channels_range"][0], 
                                       self.hp_space["channels_range"][1],
