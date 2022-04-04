@@ -20,7 +20,7 @@ class ConvBlock(nn.Module):
         - eventual batch normalization
         - activation function
     """
-    def __init__(self, input_channels, out_channels, config, batch_norm=False, activation="relu"):
+    def __init__(self, input_channels, out_channels, config, instance_norm=False, activation="relu"):
 
         super().__init__()
         
@@ -31,14 +31,14 @@ class ConvBlock(nn.Module):
                               padding      = config[2],
                              )
         # eventually add batch normalization
-        self.batch_norm = batch_norm
-        if self.batch_norm:
-            self.bn = nn.BatchNorm2d(out_channels)
+        self.instance_norm = instance_norm
+        if self.instance_norm:
+            self.bn = nn.InstanceNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.conv(x)
-        if self.batch_norm:
+        if self.instance_norm:
             x = self.bn(x)
         x = self.act(x)
         return x
@@ -51,7 +51,7 @@ class ConvTransposeBlock(nn.Module):
         - eventual batch normalization
         - activation function
     """
-    def __init__(self, input_channels, out_channels, config, out_pad, batch_norm=False, activation="relu"):
+    def __init__(self, input_channels, out_channels, config, out_pad, instance_norm=False, activation="relu"):
 
         super().__init__()
         
@@ -63,14 +63,14 @@ class ConvTransposeBlock(nn.Module):
                                          output_padding = out_pad,
                                         )
         # eventually add batch normalization
-        self.batch_norm = batch_norm
-        if self.batch_norm:
-            self.bn = nn.BatchNorm2d(out_channels)
+        self.instance_norm = instance_norm
+        if self.instance_norm:
+            self.bn = nn.InstanceNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.deconv(x)
-        if self.batch_norm:
+        if self.instance_norm:
             x = self.bn(x)
         x = self.act(x)
         return x
@@ -127,7 +127,7 @@ class Encoder(nn.Module):
         for idx,values in enumerate(self.hp["conv_config"]):
             out_channels = self.hp["channels"][idx]
             conv_list.append( ConvBlock(channels, out_channels, values, 
-                                        self.hp["batch_norm"], self.hp["activation"],
+                                        self.hp["instance_norm"], self.hp["activation"],
                             )          )
             channels = out_channels # redefine the number of input channels for the next layer
             
@@ -198,7 +198,7 @@ class Decoder(nn.Module):
             in_channels  = self.hp["channels"][idx]
             out_channels = self.hp["channels"][idx+1]
             deconv_list.append( ConvTransposeBlock(in_channels, out_channels, values, out_padding[idx],
-                                                   self.hp["batch_norm"], self.hp["activation"],
+                                                   self.hp["instance_norm"], self.hp["activation"],
                               )                   )
         # append last deconvolutional layer
         deconv_list.append( nn.ConvTranspose2d(in_channels  = self.hp["channels"][-1],

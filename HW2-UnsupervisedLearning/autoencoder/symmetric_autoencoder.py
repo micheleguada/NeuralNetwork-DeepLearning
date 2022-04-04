@@ -44,9 +44,9 @@ class SymmetricAutoencoder(pl.LightningModule):
                                            [3, 2, 0],
                                            [3, 1, 0],
                                           ],
-                      "linear_config"   : [128, 64],
+                      "linear_config"   : [128],
                       "latent_space_dim": 8,
-                      "batch_norm"      : False,
+                      "instance_norm"   : False,
                       "Pdropout"        : 0.,
                       "activation"      : "relu",
                      } 
@@ -71,47 +71,39 @@ class SymmetricAutoencoder(pl.LightningModule):
                                      unflatten_dim = conv_shape, 
                                      out_padding   = out_padding,
                                     ) 
-        self.min_val_loss = None  # to store minimum validation loss
            
     def forward(self, x, additional_out=False):
         z = self.encoder(x)
         x_hat = self.decoder(z)
         return x_hat
     
+    def compute_loss(self, input, target):
+        return nn.functional.mse_loss(input=input, target=target)
+    
     def training_step(self, batch, batch_idx=None):
         orig, _ = batch
         gen     = self.forward(orig)  
         
-        train_loss = nn.functional.mse_loss(input=gen, target=orig)
-        self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True)
-        return train_loss
+        train_loss = self.compute_loss(input=gen, target=orig)
+        self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True, prog_bar=True) 
+        return train_loss      
 
     def validation_step(self, batch, batch_idx=None):
         orig, _ = batch
         gen     = self.forward(orig)
         
-        val_loss = nn.functional.mse_loss(input=gen, target=orig)
+        val_loss = self.compute_loss(input=gen, target=orig)
         self.log("val_loss", val_loss.item(), on_step=False, on_epoch=True, prog_bar=True)
-        return val_loss
-    
-    def validation_epoch_end(self, outputs):
-        val_loss = torch.stack(outputs).mean()
-        
-        # store minimum reached validation loss
-        if (self.min_val_loss is None) or (self.min_val_loss > val_loss.item()):
-            self.min_val_loss = val_loss.item()
-            self.log("min_val_loss", self.min_val_loss, on_step=False, on_epoch=True)
-        return    
+        return val_loss  
     
     def test_step(self, batch, batch_idx):
         # test loss
         orig, _ = batch
         gen     = self.forward(orig)
         
-        test_loss = nn.functional.mse_loss(input=gen, target=orig)
-        self.log("test_loss", test_loss.item(), on_step=False, on_epoch=True)
-        
-        return
+        test_loss = self.compute_loss(input=gen, target=orig)
+        self.log("test_loss", test_loss.item(), on_step=False, on_epoch=True) 
+        return test_loss
         
     
     def configure_optimizers(self):
@@ -173,29 +165,17 @@ class SymmetricAutoencoderHPS(BaseHPS):
     """        
     def sample_model_params(self, trial):
         ### convolutional parameters
-        n_configs = len(self.hp_space["conv_configs"])
-        conv_config_id = trial.suggest_categorical( "conv_config_id", list(range(n_configs)) )
+        # layers
+        n_conv_configs = len(self.hp_space["conv_configs"])
+        conv_config_id = trial.suggest_categorical( "conv_config_id", list(range(n_conv_configs)) )
         conv_config = self.hp_space["conv_configs"][conv_config_id]
         
-        # DANGER qui voglio modificare il modo in cui faccio il sampling, ma non so come ????? DANGER
-        #n_conv_layers = len(conv_config)
-        #channel_1st = trial.suggest_int("channels_0", 
-                                        #self.hp_space["channels_range"][0], 
-                                        #self.hp_space["channels_range"][1],
-                                        #step = self.hp_space["channels_range"][2],
-                                       #) 
+        # channels
+        n_ch_configs = len(self.hp_space["channels_configs"])
+        channels_config_id = trial.suggest_categorical( "channels_config_id", list(range(n_ch_configs)) )
         
-        #channel_f = []
-        #for layer_id in range(1,n_conv_layers):
-            #channel_f.append( trial.suggest_int(f"channel_factor_{layer_id}", 1, 2) )
-        
-        channels = [trial.suggest_int(f"channels_{ii}", 
-                                      self.hp_space["channels_range"][0], 
-                                      self.hp_space["channels_range"][1],
-                                      step = self.hp_space["channels_range"][2],
-                                     )
-                    for ii in range(len(conv_config))
-                   ]
+        n_conv_layers = len(conv_config)
+        channels = self.hp_space["channels_configs"][channels_config_id][:n_conv_layers]
 
         ### linear layers parameters        
         n_linear = trial.suggest_categorical("n_linear", self.hp_space["n_linear"])
@@ -213,11 +193,11 @@ class SymmetricAutoencoderHPS(BaseHPS):
                                              step = self.hp_space["latent_space_range"][2],
                                             )
         ### others 
-        batch_norm = trial.suggest_categorical("batch_norm", self.hp_space["batch_norm"])
-        Pdropout   = trial.suggest_float("Pdropout", 
-                                         self.hp_space["Pdropout_range"][0],
-                                         self.hp_space["Pdropout_range"][1],
-                                        )
+        instance_norm = trial.suggest_categorical("instance_norm", self.hp_space["instance_norm"])
+        Pdropout      = trial.suggest_float("Pdropout", 
+                                            self.hp_space["Pdropout_range"][0],
+                                            self.hp_space["Pdropout_range"][1],
+                                           )
         activation = trial.suggest_categorical("activation", self.hp_space["activations"])
         
         # build model hyperparameters dictionary
@@ -225,7 +205,7 @@ class SymmetricAutoencoderHPS(BaseHPS):
                   "conv_config"     : conv_config,
                   "linear_config"   : linear_config,
                   "latent_space_dim": latent_space_dim,
-                  "batch_norm"      : batch_norm,
+                  "instance_norm"   : instance_norm,
                   "Pdropout"        : Pdropout,
                   "activation"      : activation,
                  } 

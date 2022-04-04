@@ -51,7 +51,7 @@ class ImageReconstruction(Callback):
         
         
 
-class EncodedRepresentation(Callback):  ### DANGER rimuovila e usa trainer.predict (vedi google...) DANGER
+class EncodedRepresentation(Callback):
     """ 
     Callback that stores a list of encoded representation of a dataset when trainer.test is called.
     """
