@@ -33,13 +33,13 @@ class ConvBlock(nn.Module):
         # eventually add batch normalization
         self.instance_norm = instance_norm
         if self.instance_norm:
-            self.bn = nn.InstanceNorm2d(out_channels)
+            self.inst_norm = nn.InstanceNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.conv(x)
         if self.instance_norm:
-            x = self.bn(x)
+            x = self.inst_norm(x)
         x = self.act(x)
         return x
     
@@ -65,13 +65,13 @@ class ConvTransposeBlock(nn.Module):
         # eventually add batch normalization
         self.instance_norm = instance_norm
         if self.instance_norm:
-            self.bn = nn.InstanceNorm2d(out_channels)
+            self.inst_norm = nn.InstanceNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.deconv(x)
         if self.instance_norm:
-            x = self.bn(x)
+            x = self.inst_norm(x)
         x = self.act(x)
         return x
     
@@ -145,15 +145,16 @@ class Encoder(nn.Module):
             
             in_units = value # redefine the number of input units for the next layer
         
-        # append latent space layer
-        linear_list.append( nn.Linear(in_units, self.hp["latent_space_dim"]) )
-        
         self.encoder_lin = nn.Sequential(*linear_list)
+        
+        # latent space layer
+        self.latent_space = nn.Linear(in_units, self.hp["latent_space_dim"])
             
     def forward(self, x, additional_out=False):
-        x = self.encoder_cnn(x) #convolutions
+        x = self.encoder_cnn(x)  # convolutions
         x = self.flatten(x)
-        x = self.encoder_lin(x) #linear layers
+        x = self.encoder_lin(x)  # linear layers
+        x = self.latent_space(x) # latent space
         return x
         
 # Decoder

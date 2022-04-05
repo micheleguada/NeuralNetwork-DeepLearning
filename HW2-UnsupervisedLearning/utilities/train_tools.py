@@ -18,8 +18,6 @@ from pytorch_lightning.callbacks import Callback, EarlyStopping
 import plotly.express as px
 
 import optuna.visualization as ov
-#from optuna.visualization import plot_optimization_history, plot_contour, plot_intermediate_values
-#from optuna.visualization import plot_parallel_coordinate, plot_param_importances
 
 # DA SISTEMARE
 
@@ -57,7 +55,6 @@ class Objective(object):
                                 )
         
         ### create trainer object
-        losses_tracker = LossesTracker()
         early_stop = EarlyStopping(monitor   = "val_loss", 
                                    min_delta = 0.001, 
                                    patience  = self.patience,
@@ -69,7 +66,7 @@ class Objective(object):
         trainer = pl.Trainer(logger     = False,
                              max_epochs = self.max_epochs,
                              gpus       = 1 if self.use_gpu else None,   #trainer will take care of moving model and datamodule to GPU
-                             callbacks  = [pl_pruning, early_stop, losses_tracker],
+                             callbacks  = [pl_pruning, early_stop],
                              enable_checkpointing = False,
                              enable_model_summary = False,
                              deterministic = True,  #use deterministic algorithms to ensure reproducibility
@@ -89,8 +86,8 @@ class Objective(object):
         
         final_valid_loss = trainer.callback_metrics["val_loss"].item()
         
-        # getting minimum reached validation loss as during final training we will use checkpointing
-        min_valid_loss   = torch.min(losses_tracker.valid)
+        # getting minimum reached validation loss
+        min_valid_loss = early_stop.best_score.detach().cpu().numpy()
 
         print(f"Trial [{trial.number}] ended at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")) 
         print(f"    Valid. loss: {final_valid_loss}; min valid. loss: {min_valid_loss}\n")
@@ -110,7 +107,7 @@ def make_decorator(dictionary):
     
 class OptimizationInspector(object):
     """
-    DANGER DANGER DANGER
+    This class provides some plotting functions to analyze the outcome of an optuna study
     """
     # dict of plotting function
     plot_dict = {}
@@ -120,6 +117,7 @@ class OptimizationInspector(object):
         
         self.study     = study
         self.save_path = save_path + "/"
+        self.data_dict = None
         
         # set figsize
         px.defaults.width  = figsize[0]
@@ -128,7 +126,10 @@ class OptimizationInspector(object):
         # ensure folder existence
         os.makedirs(self.save_path, exist_ok=True)
         
-        self.print_summary()
+        ## print dict of available plot functions
+        #print("Available plot methods:")
+        #for method in list(self.plot_dict):
+            #print("   ", method)
         
     def save_best_hypers_json(self, best_hypers_file):
         # save best hyperparameters to file (json)
@@ -159,17 +160,24 @@ class OptimizationInspector(object):
         print("   Best Trial ID   : ", self.study.best_trial.number)
         print("   Best value      : ", self.study.best_value )
         
-        best_hypers = self.study.best_trial.user_attrs["hypers"]        
-        print("\nBest set of hyper-parameters:\n", best_hypers)
-        
-        # print dict of available plot functions
-        print("\nAvailable plot methods:")
-        print(list(self.plot_dict))
+        best_hypers = self.study.best_trial.user_attrs["hypers"]       
+        print("\nBest set of hyper-parameters:")
+        width = max([len(tt) for tt in list(best_hypers)]) # string width when printing param name 
+        for key,var in best_hypers.items():
+            if key == "params":
+                ww = max([len(tt) for tt in list(var)])
+                print("    Model parameters:")
+                for kk,vv in var.items():
+                    print(f"        {kk: <{ww}}: {vv}")
+            else:
+                print(f"    {key: <{width}}: {var}")
+        print("")
         
         return
     
+    
     def plot_all(self, parallel_sets = [], contour_sets = [], slice_sets = [],
-                 show = "111000000", save = True,
+                 show = "110001000", save = True,
                 ):
         """
         Produce all the defined plots in this class (actually 9). Showing is controlled by the variable 'show'.
@@ -177,18 +185,18 @@ class OptimizationInspector(object):
          - show : binary string of lenght 9 ('1' to show image, '0' to not show).
          - save : if to save the pictures on disk
         """
-        data_dict = {"parallel": parallel_sets,
-                     "contour" : contour_sets ,
-                     "slice"   : slice_sets   ,
-                    }
+        self.data_dict = {"parallel": parallel_sets,
+                          "contour" : contour_sets ,
+                          "slice"   : slice_sets   ,
+                         }
         
         for idx,key in enumerate(self.plot_dict):
-            self.plot_dict[key](self, show=show[idx], save=save, data_dict=data_dict)
+            self.plot_dict[key](self, show=show[idx], save=save)
             
         return
-    
+        
     @_plot_dict_member("time_vs_value")
-    def time_vs_value(self, show="0", name="time_vs_value", save=False, data_dict=None):  
+    def time_vs_value(self, show="0", name="time_vs_value", save=False):  
         
         study_df = self.study.trials_dataframe()
         
@@ -213,42 +221,40 @@ class OptimizationInspector(object):
         return
     
     @_plot_dict_member("optimization_history")
-    def optimization_history(self, show="0", name="optimization_history", save=False, data_dict=None):
+    def optimization_history(self, show="0", name="optimization_history", save=False):
         fig = ov.plot_optimization_history(self.study)
         self._handle_image(fig, show, name, save)
         return
     
     @_plot_dict_member("intermediate_values")
-    def intermediate_values(self, show="0", name="intermediate_values", save=False, data_dict=None):
+    def intermediate_values(self, show="0", name="intermediate_values", save=False):
         fig = ov.plot_intermediate_values(self.study)
         self._handle_image(fig, show, name, save)
         return
     
     @_plot_dict_member("importances")
-    def importances(self, show="0", name="importances", save=False, data_dict=None):
+    def importances(self, show="0", name="importances", save=False):
         fig = ov.plot_param_importances(self.study)
         self._handle_image(fig, show, name, save)
         return
         
     @_plot_dict_member("latent_dim_vs_value")
-    def latent_dim_vs_value(self, show="0", name="latent_dim_vs_value", save=False, data_dict=None):
+    def latent_dim_vs_value(self, show="0", name="latent_dim_vs_value", save=False):
 
         study_df  = self.study.trials_dataframe()
         study_df["name"] = study_df.apply(lambda row: "Trial "+str(row['number']), axis=1)
         latent_df = study_df.sort_values(by="params_conv_config_id")
 
         fig = px.scatter(latent_df, 
-                         x="params_latent_space_dim", y="value",
-                         labels = {"params_latent_space_dim":"Latent space dimension",
-                                   "value"                  :"Min Validation Loss",
-                                   "color"                  :"Conv. config ID",
-                                   "params_optimizer"       :"Optimizer",
-                                  },
-                         color  = latent_df["params_conv_config_id"].astype(str),
-                         color_discrete_sequence = px.colors.qualitative.Set1,
-                         symbol = latent_df["params_optimizer"],
-                         hover_name = "name", 
-                         log_y  = True,
+                        x="params_latent_space_dim", y="value",
+                        labels = {"params_latent_space_dim":"Latent space dimension",
+                                "value"                  :"Min Validation Loss",
+                                "color"                  :"Optimizer",
+                                },
+                        color  = latent_df["params_optimizer"].astype(str),
+                        color_discrete_sequence = px.colors.qualitative.Set1,
+                        hover_name = "name", 
+                        log_y  = True,
                         )
         fig.update_traces(marker={'size': 8})
         self._handle_image(fig, show, name, save)
@@ -256,73 +262,76 @@ class OptimizationInspector(object):
         return
     
     @_plot_dict_member("conv_vs_channels")
-    def conv_vs_channels(self, show="0", name="conv_vs_channels", save=False, data_dict=None):
+    def conv_vs_channels(self, show="0", name="conv_vs_channels", save=False):
         
         study_df  = self.study.trials_dataframe()
         study_df["name"] = study_df.apply(lambda row: "Trial "+str(row['number']), axis=1)
 
         fig = px.scatter(study_df, 
-                         x="params_channels_config_id", y="params_conv_config_id",
-                         labels = {"params_channels_config_id":"Channels config ID",
-                                   "params_conv_config_id"    :"Conv. config ID",
-                                   "color"                    :"Min Validation Loss",
-                                   "params_optimizer"         :"Optimizer",
-                                  },
-                         color  = study_df["value"],
-                         symbol = study_df["params_optimizer"],
-                         hover_name = "name", 
-                         log_y  = True,
+                        x="params_channels_config_id", y="params_conv_config_id",
+                        labels = {"params_channels_config_id":"Channels config ID",
+                                "params_conv_config_id"    :"Conv. config ID",
+                                "value"                    :"Value",
+                                "params_optimizer"         :"Optimizer",
+                                },
+                        color  = study_df["value"],
+                        color_continuous_scale=px.colors.sequential.Viridis,
+                        symbol = study_df["params_optimizer"],
+                        hover_name = "name", 
                         )
         fig.update_traces(marker={'size': 8})
+        fig.update_layout(legend=dict(title       = "Optimizer:",
+                                    orientation = "h",
+                                    yanchor = "bottom",
+                                    y=1.02,
+                                    xanchor = "right",
+                                    x=1,
+                        )           )
         self._handle_image(fig, show, name, save)
         
         return
     
     @_plot_dict_member("parallel_plots")
-    def parallel_plots(self, parallel_sets=[], show="0", name="parallel", save=False, data_dict=None):
+    def parallel_plots(self, parallel_sets=[], show="0", name="parallel", save=False):
         
-        if data_dict is not None:
-            parallel_sets = data_dict["parallel"]
+        if self.data_dict is not None:
+            parallel_sets = self.data_dict["parallel"]
         for conf in parallel_sets:        
             # build suffix 
             suffix = "_" + conf[0]   # first is the suffix for the filename
             
             fig = ov.plot_parallel_coordinate(self.study, params=conf[1:])
-            name = name + suffix
-            self._handle_image(fig, show, name, save)
+            self._handle_image(fig, show, name + suffix, save)
 
         return
     
     @_plot_dict_member("contour_plots")
-    def contour_plots(self, contour_sets=[], show="0", name="contour", save=False, data_dict=None):
+    def contour_plots(self, contour_sets=[], show="0", name="contour", save=False):
         
-        if data_dict is not None:
-            contour_sets = data_dict["contour"]
+        if self.data_dict is not None:
+            contour_sets = self.data_dict["contour"]
         for conf in contour_sets:        
             # build suffix based on passed parameters
-            suffix = "_".join(conf)
+            suffix = "_" + "_".join(conf)
             
             fig = ov.plot_contour(self.study, params=conf)
-            name = name + suffix
-            self._handle_image(fig, show, name, save)
+            self._handle_image(fig, show, name + suffix, save)
 
         return
     
     @_plot_dict_member("slice_plots")
-    def slice_plots(self, slice_sets=[], show="0", name="slice", save=False, data_dict=None):
+    def slice_plots(self, slice_sets=[], show="0", name="slice", save=False):
         
-        if data_dict is not None:
-            slice_sets = data_dict["slice"]
+        if self.data_dict is not None:
+            slice_sets = self.data_dict["slice"]
         for conf in slice_sets:        
             # build suffix based on passed parameters
-            suffix = "_".join(conf)
+            suffix = "_" + "_".join(conf)
             
             fig = ov.plot_slice(self.study, params=conf)
-            name = name + suffix
-            self._handle_image(fig, show, name, save)
+            self._handle_image(fig, show, name + suffix, save)
 
-        return
-   
+        return   
    
 
 ##### training tools #####-----------------------------------------------------------------------------
