@@ -23,28 +23,48 @@ import optuna.visualization as ov
 
 
 ##### Optuna optimization tools #####------------------------------------------------------------------------
+class MinValidationLoss(Callback):
+    """
+    Class that store the minimum reached validation loss.
+    """
+    def __init__(self, val_name="val_loss"): 
+        self.val_name = val_name
+        self.min_valid_loss = -1.
+    
+    def on_validation_epoch_end(self, trainer, module):  
+        # get current validation loss
+        current_val = trainer.logged_metrics[self.val_name].cpu().item()
+        if ( (self.min_valid_loss >= current_val) or (self.min_valid_loss < 0.) ):
+            self.min_valid_loss = current_val
+            
+        return
+
 
 class Objective(object):
     """ Objective class for the optuna study optimization to be used with PyTorch-Lightning. """
-    def __init__(self, model_class, datamodule, hp_space,
-                 max_epochs=50, early_stop_patience=5, use_gpu=False,
+    def __init__(self, model_class, datamodule, hp_space, max_epochs=50, min_delta=0.001,
+                 early_stop_patience=5, use_gpu=False, auto_lr_find=False,
                 ):  
         self.model_class = model_class
         self.datamodule  = datamodule
         self.hp_space    = hp_space     # object of class: 'HyperparameterSpace'
             
-        self.max_epochs  = max_epochs  
+        self.max_epochs  = max_epochs
+        self.min_delta   = min_delta
         self.patience    = early_stop_patience
         self.use_gpu     = use_gpu
+        self.auto_lr_find = auto_lr_find
         
     def __call__(self, trial):
         
         print(f"Trial [{trial.number}] started at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
 
         ### sample hyperparameters
-        params                                         = self.hp_space.sample_model_params(trial)
-        optimizer, learning_rate, L2_penalty, momentum = self.hp_space.sample_optim_params(trial)
-        
+        params, optimizer, learning_rate, L2_penalty, momentum = self.hp_space.sample_configuration(trial, 
+                                                                                                    self.auto_lr_find,
+                                                                                                    self.use_gpu,
+                                                                                                    self.datamodule,
+                                                                                                   )
         ### create model
         model = self.model_class(input_size = self.datamodule.get_sample_size(),
                                  params     = params,
@@ -55,8 +75,9 @@ class Objective(object):
                                 )
         
         ### create trainer object
+        min_valid_callback = MinValidationLoss()
         early_stop = EarlyStopping(monitor   = "val_loss", 
-                                   min_delta = 0.001, 
+                                   min_delta = self.min_delta, 
                                    patience  = self.patience,
                                    verbose   = False, 
                                    check_on_train_epoch_end=False, # check early_stop at end of validation
@@ -65,17 +86,16 @@ class Objective(object):
         
         trainer = pl.Trainer(logger     = False,
                              max_epochs = self.max_epochs,
-                             gpus       = 1 if self.use_gpu else None,   #trainer will take care of moving model and datamodule to GPU
-                             callbacks  = [pl_pruning, early_stop],
+                             gpus       = 1 if self.use_gpu else None,  #trainer will take care of moving model and datamodule to GPU
+                             callbacks  = [pl_pruning, early_stop, min_valid_callback],
                              enable_checkpointing = False,
                              enable_model_summary = False,
-                             deterministic = True,  #use deterministic algorithms to ensure reproducibility
-                            )
-        
+                             deterministic  = True,     #use deterministic algorithms for reproducibility
+                            )        
         ### fit the model
         trainer.fit(model, datamodule=self.datamodule)
         
-        # storing hyper-parameters as user attribute of trial object for convenience
+        # storing hyper-parameters as user attribute of trial object for convenience        
         hypers = {"params"       : params,
                   "optimizer"    : optimizer,
                   "learning_rate": learning_rate,
@@ -87,13 +107,12 @@ class Objective(object):
         final_valid_loss = trainer.callback_metrics["val_loss"].item()
         
         # getting minimum reached validation loss
-        min_valid_loss = early_stop.best_score.detach().cpu().numpy()
+        min_valid_loss = min_valid_callback.min_valid_loss
 
-        print(f"Trial [{trial.number}] ended at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")) 
+        print(f"Trial [{trial.number}] ended at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
         print(f"    Valid. loss: {final_valid_loss}; min valid. loss: {min_valid_loss}\n")
         
-        return min_valid_loss
-    
+        return min_valid_loss     
     
     
 # decorator to add a function to a dictionary
@@ -107,17 +126,18 @@ def make_decorator(dictionary):
     
 class OptimizationInspector(object):
     """
-    This class provides some plotting functions to analyze the outcome of an optuna study
+    This class provides some plotting functions to analyze the outcome of an optuna study.
     """
     # dict of plotting function
     plot_dict = {}
-    _plot_dict_member = make_decorator(plot_dict)    
+    _plot_dict_member = make_decorator(plot_dict)
     
-    def __init__(self, study, save_path="Results_test", figsize=(1024,600)):
+    def __init__(self, study, save_path="Results_test", figsize=(1024,600), fmt=".pdf"):
         
         self.study     = study
         self.save_path = save_path + "/"
         self.data_dict = None
+        self.fmt       = fmt
         
         # set figsize
         px.defaults.width  = figsize[0]
@@ -143,7 +163,7 @@ class OptimizationInspector(object):
         if show == "1":
             fig.show()
         if (save) and (name is not None):
-            full_path = self.save_path + name + ".pdf"
+            full_path = self.save_path + name + self.fmt
             fig.write_image(full_path)   
             print("New image saved: ", full_path)
         return
@@ -177,7 +197,7 @@ class OptimizationInspector(object):
     
     
     def plot_all(self, parallel_sets = [], contour_sets = [], slice_sets = [],
-                 show = "110001000", save = True,
+                 show = "100011000", save = True,
                 ):
         """
         Produce all the defined plots in this class (actually 9). Showing is controlled by the variable 'show'.
@@ -191,12 +211,34 @@ class OptimizationInspector(object):
                          }
         
         for idx,key in enumerate(self.plot_dict):
+            if (show[idx] == "0") and not save: #skip plots that are not showed or saved
+                print("   Skipping plot function:", key)
+                continue
             self.plot_dict[key](self, show=show[idx], save=save)
             
         return
-        
-    @_plot_dict_member("time_vs_value")
-    def time_vs_value(self, show="0", name="time_vs_value", save=False):  
+    
+    @_plot_dict_member("optimization_history") #1
+    def optimization_history(self, show="1", name="optimization_history", save=False):
+        fig = ov.plot_optimization_history(self.study)
+        fig.update_yaxes(type="log")
+        self._handle_image(fig, show, name, save)
+        return
+    
+    @_plot_dict_member("intermediate_values") #2
+    def intermediate_values(self, show="1", name="intermediate_values", save=False):
+        fig = ov.plot_intermediate_values(self.study)
+        self._handle_image(fig, show, name, save)
+        return
+    
+    @_plot_dict_member("importances") #3
+    def importances(self, show="1", name="importances", save=False):
+        fig = ov.plot_param_importances(self.study)
+        self._handle_image(fig, show, name, save)
+        return
+    
+    @_plot_dict_member("time_vs_value") #4
+    def time_vs_value(self, show="1", name="time_vs_value", save=False):  
         
         study_df = self.study.trials_dataframe()
         
@@ -219,27 +261,9 @@ class OptimizationInspector(object):
         # plot and save image
         self._handle_image(fig, show, name, save)
         return
-    
-    @_plot_dict_member("optimization_history")
-    def optimization_history(self, show="0", name="optimization_history", save=False):
-        fig = ov.plot_optimization_history(self.study)
-        self._handle_image(fig, show, name, save)
-        return
-    
-    @_plot_dict_member("intermediate_values")
-    def intermediate_values(self, show="0", name="intermediate_values", save=False):
-        fig = ov.plot_intermediate_values(self.study)
-        self._handle_image(fig, show, name, save)
-        return
-    
-    @_plot_dict_member("importances")
-    def importances(self, show="0", name="importances", save=False):
-        fig = ov.plot_param_importances(self.study)
-        self._handle_image(fig, show, name, save)
-        return
         
-    @_plot_dict_member("latent_dim_vs_value")
-    def latent_dim_vs_value(self, show="0", name="latent_dim_vs_value", save=False):
+    @_plot_dict_member("latent_dim_vs_value") #5
+    def latent_dim_vs_value(self, show="1", name="latent_dim_vs_value", save=False):
 
         study_df  = self.study.trials_dataframe()
         study_df["name"] = study_df.apply(lambda row: "Trial "+str(row['number']), axis=1)
@@ -248,9 +272,9 @@ class OptimizationInspector(object):
         fig = px.scatter(latent_df, 
                         x="params_latent_space_dim", y="value",
                         labels = {"params_latent_space_dim":"Latent space dimension",
-                                "value"                  :"Min Validation Loss",
-                                "color"                  :"Optimizer",
-                                },
+                                  "value"                  :"Min Validation Loss",
+                                  "color"                  :"Optimizer",
+                                 },
                         color  = latent_df["params_optimizer"].astype(str),
                         color_discrete_sequence = px.colors.qualitative.Set1,
                         hover_name = "name", 
@@ -261,38 +285,38 @@ class OptimizationInspector(object):
         
         return
     
-    @_plot_dict_member("conv_vs_channels")
-    def conv_vs_channels(self, show="0", name="conv_vs_channels", save=False):
+    @_plot_dict_member("conv_vs_channels") #6
+    def conv_vs_channels(self, show="1", name="conv_vs_channels", save=False):
         
         study_df  = self.study.trials_dataframe()
         study_df["name"] = study_df.apply(lambda row: "Trial "+str(row['number']), axis=1)
 
         fig = px.scatter(study_df, 
-                        x="params_channels_config_id", y="params_conv_config_id",
-                        labels = {"params_channels_config_id":"Channels config ID",
-                                "params_conv_config_id"    :"Conv. config ID",
-                                "value"                    :"Value",
-                                "params_optimizer"         :"Optimizer",
-                                },
-                        color  = study_df["value"],
-                        color_continuous_scale=px.colors.sequential.Viridis,
-                        symbol = study_df["params_optimizer"],
-                        hover_name = "name", 
+                         x="params_channels_config_id", y="params_conv_config_id",
+                         labels = {"params_channels_config_id":"Channels config ID",
+                                   "params_conv_config_id"    :"Conv. config ID",
+                                   "value"                    :"Value",
+                                   "params_optimizer"         :"Optimizer",
+                                  },
+                         color      = study_df["value"],
+                         color_continuous_scale = px.colors.sequential.Viridis,
+                         symbol     = study_df["params_optimizer"],
+                         hover_name = "name", 
                         )
         fig.update_traces(marker={'size': 8})
         fig.update_layout(legend=dict(title       = "Optimizer:",
-                                    orientation = "h",
-                                    yanchor = "bottom",
-                                    y=1.02,
-                                    xanchor = "right",
-                                    x=1,
-                        )           )
+                                      orientation = "h",
+                                      yanchor = "bottom",
+                                      y=1.02,
+                                      xanchor = "right",
+                                      x=1,
+                         )           )
         self._handle_image(fig, show, name, save)
         
         return
     
-    @_plot_dict_member("parallel_plots")
-    def parallel_plots(self, parallel_sets=[], show="0", name="parallel", save=False):
+    @_plot_dict_member("parallel_plots") #7
+    def parallel_plots(self, parallel_sets=[], show="1", name="parallel", save=False):
         
         if self.data_dict is not None:
             parallel_sets = self.data_dict["parallel"]
@@ -305,8 +329,8 @@ class OptimizationInspector(object):
 
         return
     
-    @_plot_dict_member("contour_plots")
-    def contour_plots(self, contour_sets=[], show="0", name="contour", save=False):
+    @_plot_dict_member("contour_plots") #8
+    def contour_plots(self, contour_sets=[], show="1", name="contour", save=False):
         
         if self.data_dict is not None:
             contour_sets = self.data_dict["contour"]
@@ -319,8 +343,8 @@ class OptimizationInspector(object):
 
         return
     
-    @_plot_dict_member("slice_plots")
-    def slice_plots(self, slice_sets=[], show="0", name="slice", save=False):
+    @_plot_dict_member("slice_plots") #9
+    def slice_plots(self, slice_sets=[], show="1", name="slice", save=False):
         
         if self.data_dict is not None:
             slice_sets = self.data_dict["slice"]
@@ -347,50 +371,11 @@ class LossesTracker(Callback):
         self.valid = []
     
     def on_train_epoch_end(self, trainer, module):
-        self.train.append(trainer.logged_metrics[self.train_name])
+        self.train.append(trainer.logged_metrics[self.train_name].cpu())
         return
     
     def on_validation_epoch_end(self, trainer, module):       
-        self.valid.append(trainer.logged_metrics[self.val_name])
+        self.valid.append(trainer.logged_metrics[self.val_name].cpu())
         return
 
-
-
-def run_training(model_class, datamodule, hypers, callbacks, max_epochs=100, ep_ratio=1., use_gpu=False):
-    """
-    Function to run the training of the autoencoder. 
-        - model_class    : class onject of the autoencoder
-        - datamodule     : pytorch-lightning datamodule
-        - hypers         : hyperparameters of the model and optimizer
-        - callbacks      : list of callbacks to use
-        - max_epochs     : maximum number of training epochs
-        - ep_ratio       : check validation "ep_ratio" times in every training epoch
-        - use_gpu        : boolean flag to activate GPU usage
-    """
-    print( "Training started at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S") )
-
-    ### define model and hyper-parameters
-    model = model_class(input_size    = datamodule.get_sample_size(),
-                        params        = hypers["params"],
-                        optimizer     = hypers["optimizer"],
-                        learning_rate = hypers["learning_rate"],
-                        L2_penalty    = hypers["L2_penalty"],
-                        momentum      = hypers["momentum"],
-                       )
-    
-    ### define trainer
-    trainer = pl.Trainer(logger     = False,
-                         max_epochs = max_epochs,
-                         gpus       = 1 if use_gpu else None,
-                         callbacks  = callbacks,
-                         val_check_interval   = (1./ep_ratio),
-                         enable_model_summary = False,
-                         num_sanity_val_steps = 0,     # disable validation sanity check before training
-                        )
-    
-    trainer.fit(model, datamodule=datamodule) # run the training
-    
-    print( "Training ended at:", datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S") )
-    
-    return model, trainer, callbacks
 

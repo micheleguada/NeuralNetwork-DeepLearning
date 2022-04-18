@@ -65,7 +65,7 @@ class EncodedRepresentation(Callback):
         encoded = module.encoder(orig)
         
         for sample,label in zip(encoded, labels):
-            self.encoded_samples.append(sample.numpy())
+            self.encoded_samples.append(sample.cpu().numpy())
             self.labels.append(label.item())
         
         return

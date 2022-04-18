@@ -5,6 +5,7 @@ import torch.optim as optim
 
 # python imports
 import numpy as np
+from abc import ABC, abstractmethod
 
 # additional libraries
 import pytorch_lightning as pl
@@ -30,7 +31,7 @@ class ConvBlock(nn.Module):
                               stride       = config[1],
                               padding      = config[2],
                              )
-        # eventually add batch normalization
+        # eventually add instance normalization
         self.instance_norm = instance_norm
         if self.instance_norm:
             self.inst_norm = nn.InstanceNorm2d(out_channels)
@@ -62,7 +63,7 @@ class ConvTransposeBlock(nn.Module):
                                          padding        = config[2],
                                          output_padding = out_pad,
                                         )
-        # eventually add batch normalization
+        # eventually add instance normalization
         self.instance_norm = instance_norm
         if self.instance_norm:
             self.inst_norm = nn.InstanceNorm2d(out_channels)
@@ -175,7 +176,7 @@ class Decoder(nn.Module):
         ### linear layers
         in_units = self.hp["latent_space_dim"]
             
-        linear_list = [get_activation(self.hp["activation"])] #append an activation after the latent space
+        linear_list = []
         for value in self.hp["linear_config"]:
             linear_list.append( LinearBlock(in_units, value, self.hp["Pdropout"], self.hp["activation"]) )
             
@@ -209,7 +210,7 @@ class Decoder(nn.Module):
                                                padding      = self.hp["conv_config"][-1][2], 
                                                output_padding = out_padding[-1],
                           )                   )
-        # append sigmoid layer at the end to ensure proper range for pixel values
+        # append sigmoid layer at the end to ensure proper range for pixels values
         deconv_list.append( nn.Sigmoid() )
         
         self.decoder_cnn = nn.Sequential(*deconv_list)
@@ -224,8 +225,49 @@ class Decoder(nn.Module):
     
     
     
-### Base hyper-parameters space class -----------------------------------------------------------------------
-class BaseHPS(object):
+    
+    
+### Abstract classes ----------------------------------------------------------------------------------------
+# Base abstract module     
+class BasePLModule(ABC, pl.LightningModule):
+    """
+    Base PyTorch Lightning module to be derived.
+    """
+    def __init__(self,
+                 optimizer     : str    = "adam",
+                 learning_rate : float  = 0.001,
+                 L2_penalty    : float  = 0.,
+                 momentum      : float  = None,   #ignored if optimizer is optim.Adam
+                ):
+        super().__init__()
+        self.optim_name = optimizer
+        self.momentum   = momentum
+        self.lr         = learning_rate
+        self.L2         = L2_penalty
+        
+    @abstractmethod
+    def forward(self, x, additional_out=False):
+        pass
+    
+    @abstractmethod
+    def compute_loss(self, input, target):
+        pass
+        
+    def configure_optimizers(self):
+        if   (self.optim_name == "adam"):
+            return optim.Adam(self.parameters(), self.lr, weight_decay=self.L2)
+        elif (self.optim_name == "sgd"):
+            return optim.SGD(self.parameters(), self.lr, momentum=self.momentum, weight_decay=self.L2)
+        elif (self.optim_name == "adamax"):
+            return optim.Adamax(self.parameters(), self.lr, weight_decay=self.L2)
+        elif (self.optim_name == "rmsprop"):
+            return optim.RMSprop(self.parameters(), self.lr, momentum=self.momentum, weight_decay=self.L2)
+        else:
+            raise ValueError("Optimizer "+self.optim_name+" not supported.")
+    
+
+# Base hyper-parameters space class -------------------------------------------------------------------------
+class BaseHPS(ABC):
     """ 
     Class that receives in input the hyper-parameters space as a dict and provide a sampling function to be
     used within a Optuna study. This is the base class to be extended for every actual model with its own
@@ -233,24 +275,27 @@ class BaseHPS(object):
     """
     def __init__(self, hp_space):
         
+        self.model_class = None
         self.hp_space = hp_space
+     
+    def sample_configuration(self, trial, auto_lr_find=False, use_gpu=False, datamodule=None):
         
-    def sample_model_params(self, trial):
+        params                                         = self._sample_model_params(trial)
+        optimizer, learning_rate, L2_penalty, momentum = self._sample_optim_params(trial, params, auto_lr_find, use_gpu, datamodule)
+        
+        return params, optimizer, learning_rate, L2_penalty, momentum
+     
+    @abstractmethod
+    def _sample_model_params(self, trial):
         """
         Function that returns a dict with the sampled values from the hyper-parameters space.
            - trial: is the 'trial' object provided by the optuna framework.
         """
-        
         pass
     
-    def sample_optim_params(self, trial):        
+    def _sample_optim_params(self, trial, params, auto_lr_find=False, use_gpu=False, datamodule=None):        
         ### optimizer parameters        
         optimizer     = trial.suggest_categorical("optimizer", self.hp_space["optimizers"])
-        learning_rate = trial.suggest_float("learning_rate", 
-                                            self.hp_space["learning_rate_range"][0], 
-                                            self.hp_space["learning_rate_range"][1],
-                                            log=True,
-                                           )
         L2_penalty    = trial.suggest_float("L2_penalty", 
                                             self.hp_space["L2_penalty_range"][0], 
                                             self.hp_space["L2_penalty_range"][1],
@@ -263,8 +308,47 @@ class BaseHPS(object):
                                            self.hp_space["momentum_range"][0], 
                                            self.hp_space["momentum_range"][1],
                                           )           
-        
+            
+        # learning_rate
+        if auto_lr_find:  # auto tune learning rate from Pytorch-Lightning
+            learning_rate = self._estimate_lr(params, optimizer, L2_penalty, momentum, datamodule, use_gpu)
+            print("Selected learning rate: ", learning_rate)
+            
+            # fake sample learning rate value
+            learning_rate = trial.suggest_float("learning_rate", learning_rate, learning_rate)
+        else:             # sample with optuna
+            learning_rate = trial.suggest_float("learning_rate", 
+                                                self.hp_space["learning_rate_range"][0], 
+                                                self.hp_space["learning_rate_range"][1],
+                                                log=True,
+                                               )        
         return optimizer, learning_rate, L2_penalty, momentum 
+
+    
+    def _estimate_lr(self, params, optimizer, L2_penalty, momentum, datamodule, use_gpu=False):        
+        ### create model
+        model = self.model_class(input_size = datamodule.get_sample_size(),
+                                 params     = params,
+                                 optimizer     = optimizer,
+                                 learning_rate = 1.,       # will be optimized by pytorch lightning
+                                 L2_penalty    = L2_penalty,
+                                 momentum      = momentum,
+                                )
+        ### create trainer object       
+        trainer = pl.Trainer(logger     = False,
+                             max_epochs = 50,
+                             gpus       = 1 if use_gpu else None,
+                             enable_checkpointing = False,
+                             enable_model_summary = False,
+                             deterministic  = True,  # use deterministic algorithms for reproducibility
+                             auto_lr_find   = True,  # if True, at beggining estimate a good learning rate
+                             detect_anomaly = True,
+                            )
+        ### find learning rate
+        lr_finder = trainer.tune(model, datamodule=datamodule)["lr_find"]
+        learning_rate = lr_finder.results["lr"][lr_finder._optimal_idx]
+               
+        return learning_rate
         
         
 
@@ -273,6 +357,10 @@ class BaseHPS(object):
 def get_activation(act):
     if act == "relu":
         return nn.ReLU(inplace=True)
+    elif act == "leaky_relu":
+        return nn.LeakyReLU(inplace=True)
+    elif act == "silu":
+        return nn.SiLU(inplace=True)   #sigmoid linear unit
     elif act == "tanh":
         return nn.Tanh()
     elif act == "sigmoid":
@@ -305,4 +393,18 @@ def conv_transpose_output_shape(input_shape, kernel_size=1, stride=1, pad=0, dil
     dim1 = int( (input_shape[0]-1)*stride - 2*pad + dilation*(kernel_size-1) + out_padding[0] +1 )
     dim2 = int( (input_shape[1]-1)*stride - 2*pad + dilation*(kernel_size-1) + out_padding[1] +1 )
     return (dim1, dim2)
+
+
+# print shape of image through convolutional layers
+def print_conv_shapes(input_shape, config):
+    
+    shape = input_shape
+    shapes = [shape]
+    for layer in config:
+        shape = conv_output_shape(shape, layer[0], layer[1], layer[2])
+        shapes.append( shape )
+        
+    print("  ", " -> ".join([str(item) for item in shapes]))
+    
+    return shapes
  

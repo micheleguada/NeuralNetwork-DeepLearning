@@ -10,15 +10,15 @@ import numpy as np
 import pytorch_lightning as pl
 
 # custom modules 
-from autoencoder.components import Encoder, Decoder, BaseHPS
+from autoencoder.components import Encoder, Decoder, BaseHPS, BasePLModule
 from autoencoder.components import get_activation, conv_output_shape, conv_transpose_output_shape
 
 
 # docs da completare ########  
-    
+
 
 ### Autoencoder class with symmetric Encoder/Decoder pair ---------------------------------------------------
-class SymmetricAutoencoder(pl.LightningModule):    
+class SymmetricAutoencoder(BasePLModule):    
     """
     Autoencoder BUG BUG
     """    
@@ -32,7 +32,11 @@ class SymmetricAutoencoder(pl.LightningModule):
                  encoder_class : object = Encoder,
                  decoder_class : object = Decoder,
                 ):
-        super().__init__()
+        super(SymmetricAutoencoder, self).__init__(optimizer     = optimizer, 
+                                                   learning_rate = learning_rate, 
+                                                   L2_penalty    = L2_penalty, 
+                                                   momentum      = momentum,
+                                                  ) 
         self.save_hyperparameters() # save hyperparameters when checkpointing
         
         self.input_size = input_size
@@ -45,7 +49,7 @@ class SymmetricAutoencoder(pl.LightningModule):
                                            [3, 1, 0],
                                           ],
                       "linear_config"   : [128],
-                      "latent_space_dim": 8,
+                      "latent_space_dim": 16,
                       "instance_norm"   : False,
                       "Pdropout"        : 0.,
                       "activation"      : "relu",
@@ -53,11 +57,6 @@ class SymmetricAutoencoder(pl.LightningModule):
                       
         self.enc_hp = params
         self.dec_hp = self._build_decoder_config(params)
-        
-        self.optim_name = optimizer
-        self.momentum   = momentum
-        self.lr         = learning_rate
-        self.L2         = L2_penalty
         
         # compute shape after_convolution/before_deconvolution and output padding
         conv_shape, out_padding = self._compute_shapes()
@@ -82,7 +81,7 @@ class SymmetricAutoencoder(pl.LightningModule):
     
     def training_step(self, batch, batch_idx=None):
         orig, _ = batch
-        gen     = self.forward(orig)  
+        gen     = self(orig)  
         
         train_loss = self.compute_loss(input=gen, target=orig)
         self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True, prog_bar=True) 
@@ -90,7 +89,7 @@ class SymmetricAutoencoder(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx=None):
         orig, _ = batch
-        gen     = self.forward(orig)
+        gen     = self(orig)
         
         val_loss = self.compute_loss(input=gen, target=orig)
         self.log("val_loss", val_loss.item(), on_step=False, on_epoch=True, prog_bar=True)
@@ -99,24 +98,11 @@ class SymmetricAutoencoder(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         # test loss
         orig, _ = batch
-        gen     = self.forward(orig)
+        gen     = self(orig)
         
         test_loss = self.compute_loss(input=gen, target=orig)
         self.log("test_loss", test_loss.item(), on_step=False, on_epoch=True) 
         return test_loss
-        
-    
-    def configure_optimizers(self):
-        if   (self.optim_name == "adam"):
-            return optim.Adam(self.parameters(), self.lr, weight_decay=self.L2)
-        elif (self.optim_name == "sgd"):
-            return optim.SGD(self.parameters(), self.lr, momentum=self.momentum, weight_decay=self.L2)
-        elif (self.optim_name == "adamax"):
-            return optim.Adamax(self.parameters(), self.lr, weight_decay=self.L2)
-        elif (self.optim_name == "rmsprop"):
-            return optim.RMSprop(self.parameters(), self.lr, momentum=self.momentum, weight_decay=self.L2)
-        else:
-            raise ValueError("Optimizer "+self.optim_name+" not supported.")
             
     
     def _compute_shapes(self):
@@ -153,7 +139,6 @@ class SymmetricAutoencoder(pl.LightningModule):
         dec_hp["linear_config"] = dec_hp["linear_config"][::-1] #  and of linear layers
         
         return dec_hp
-    
         
         
 
@@ -163,7 +148,13 @@ class SymmetricAutoencoderHPS(BaseHPS):
     Class that receives in input the hyper-parameters space as a dict and provide a sampling function to be
     used within a Optuna study. This class is for the SymmetricAutoencoder model.
     """        
-    def sample_model_params(self, trial):
+    def __init__(self, hp_space):
+        
+        super().__init__(hp_space)
+        self.model_class = SymmetricAutoencoder
+    
+    
+    def _sample_model_params(self, trial):
         ### convolutional parameters
         # layers
         n_conv_configs = len(self.hp_space["conv_configs"])

@@ -1,13 +1,19 @@
 # python imports
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
+import os
 
+# pytorch imports
+import torchmetrics
 
 # DA SISTEMARE i docs strings ....... TODO TODO
 
 
 def plot_history(train, valid, figsize=(8,5), ylog=True, save_path=None):
-    
+    """
+    Function that plot and save the training history with train and validation losses.
+    """
     tr_epochs  = len(train)
     val_epochs = len(valid)
     
@@ -51,7 +57,9 @@ def plot_history(train, valid, figsize=(8,5), ylog=True, save_path=None):
 def plot_img_grid(grid_shape, images, titles=None, folder_path=None, filename="plot_img_grid_test.pdf", 
                   to_show=False, figsize=(12,6), suptitle=None, cmap="Greys", axis_off=True,
                  ):
-    # plot grid of images
+    """
+    Function that plots a grid of images with configurable shape.
+    """
     rows = grid_shape[0]
     cols = grid_shape[1]
     fig, axs = plt.subplots(rows, cols, figsize=figsize)
@@ -78,7 +86,7 @@ def plot_img_grid(grid_shape, images, titles=None, folder_path=None, filename="p
     # save figure
     if folder_path is not None:
         os.makedirs(folder_path, exist_ok=True)
-        fig.savefig( folder_path + filename )
+        fig.savefig( folder_path + "/" + filename )
     
     # plot figure
     if to_show:
@@ -86,4 +94,53 @@ def plot_img_grid(grid_shape, images, titles=None, folder_path=None, filename="p
     plt.close()
     
     return fig
+
+
+
+def plot_confusion_matrix(guesses, true_labels, label_names, figsize=(8,5), save_path=None):
+    """
+    Function that produce and plot a confusion matrix from the true labels and model predictions.
+    """
+    num_classes = len(label_names)
+    
+    # bulding confusion matrix
+    confusion_matrix = torchmetrics.ConfusionMatrix(num_classes)
+    mat = confusion_matrix(guesses, true_labels).numpy()
+
+    # plotting    
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(mat)
+
+    # Show all ticks and label them with the respective names
+    ax.set_xticks(np.arange(num_classes))
+    ax.set_xticklabels(label_names)
+    
+    ax.set_yticks(np.arange(num_classes))
+    ax.set_yticklabels(label_names)
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+             rotation_mode="anchor")
+
+    # Loop over data dimensions and create text annotations.
+    formatter = matplotlib.ticker.StrMethodFormatter("{x:d}")
+    
+    for i in range(num_classes):
+        for j in range(num_classes):
+            datum = mat[i, j].astype(int)
+            color = "white" if (datum < np.amax(mat)*0.5) else "black"
+            text = ax.text(j, i, formatter(datum), fontsize=12,
+                           ha="center", va="center", color=color)
+
+    ax.set_title("Confusion Matrix", fontsize=14)
+    ax.set_xlabel("Predicted labels")
+    ax.set_ylabel("True labels")
+    fig.tight_layout()
+    plt.show()
+            
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+    return
+
+
 
