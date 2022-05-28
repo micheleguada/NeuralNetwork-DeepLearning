@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 # additional libraries
 import pytorch_lightning as pl
 
-# docs da completare ########
+
 
 ### Base blocks for model architecture ----------------------------------------------------------------------
 # convolutional block
@@ -18,7 +18,7 @@ class ConvBlock(nn.Module):
     """
     Base convolutional block composed of:
         - a convolutional layer
-        - eventual batch normalization
+        - eventual instance normalization
         - activation function
     """
     def __init__(self, input_channels, out_channels, config, instance_norm=False, activation="relu"):
@@ -49,7 +49,7 @@ class ConvTransposeBlock(nn.Module):
     """
     Base deconvolutional block composed of:
         - a deconvolutional layer
-        - eventual batch normalization
+        - eventual instance normalization
         - activation function
     """
     def __init__(self, input_channels, out_channels, config, out_pad, instance_norm=False, activation="relu"):
@@ -147,15 +147,11 @@ class Encoder(nn.Module):
             in_units = value # redefine the number of input units for the next layer
         
         self.encoder_lin = nn.Sequential(*linear_list)
-        
-        # latent space layer
-        self.latent_space = nn.Linear(in_units, self.hp["latent_space_dim"])
             
     def forward(self, x, additional_out=False):
         x = self.encoder_cnn(x)  # convolutions
         x = self.flatten(x)
         x = self.encoder_lin(x)  # linear layers
-        x = self.latent_space(x) # latent space
         return x
         
 # Decoder
@@ -397,7 +393,9 @@ def conv_transpose_output_shape(input_shape, kernel_size=1, stride=1, pad=0, dil
 
 # print shape of image through convolutional layers
 def print_conv_shapes(input_shape, config):
-    
+    """
+    Utility function that computes and prints the shape of image through the convolutional layers.
+    """    
     shape = input_shape
     shapes = [shape]
     for layer in config:

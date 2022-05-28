@@ -14,13 +14,12 @@ from autoencoder.components import Encoder, Decoder, BaseHPS, BasePLModule
 from autoencoder.components import get_activation, conv_output_shape, conv_transpose_output_shape
 
 
-# docs da completare ########  
 
 
 ### Autoencoder class with symmetric Encoder/Decoder pair ---------------------------------------------------
 class SymmetricAutoencoder(BasePLModule):    
     """
-    Autoencoder BUG BUG
+    Autoencoder with symmetric Encoder/Decoder pair.
     """    
     def __init__(self, 
                  input_size    : tuple, 
@@ -69,10 +68,16 @@ class SymmetricAutoencoder(BasePLModule):
                                      params        = self.dec_hp, 
                                      unflatten_dim = conv_shape, 
                                      out_padding   = out_padding,
-                                    ) 
+                                    )                 
+        # latent space layer
+        self.latent_space = nn.Linear(params["linear_config"][-1], params["latent_space_dim"])
+        
+    def get_latent_representation(self, x):
+        return self.latent_space(self.encoder(x))
            
     def forward(self, x, additional_out=False):
-        z = self.encoder(x)
+        z     = self.encoder(x)
+        z     = self.latent_space(z)
         x_hat = self.decoder(z)
         return x_hat
     

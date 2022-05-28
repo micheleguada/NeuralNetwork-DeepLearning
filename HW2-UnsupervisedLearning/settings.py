@@ -36,33 +36,22 @@ class autoencoder():
 
 class transfer_learning():
     ROOT_DIR             = RESULTS_DIR + "/TransferLearning"
-#    OPTUNA_DIR           = ROOT_DIR + "/OptunaStudy"              DANGER
-#    BEST_HYPERS_FILE     = ROOT_DIR + "/best_hypers.json"        # file where to store the best hyper-parameters obtained with optuna 
     BEST_MODEL_CKPT_FILE = ROOT_DIR + "/best_model.ckpt"         # file where to store the best checkpoint model
-    
-#    OPTUNA_STUDY_NAME    = "HP_search_transfer_learning"          DANGER
     
 
 ##### DENOISING AUTOENCODER ##### ---------------------------------------------------------------------------
 
 class denoisingAE():
     ROOT_DIR             = RESULTS_DIR + "/DenoisingAutoencoder"
-#    OPTUNA_DIR           = ROOT_DIR + "/OptunaStudy"
     RECONSTRUCTIONS_DIR  = ROOT_DIR + "/ReconstructionExamples"  # directory to store reconstruction of images 
-#    BEST_HYPERS_FILE     = ROOT_DIR + "/best_hypers.json"        # file where to store the best hyper-parameters obtained with optuna 
     BEST_MODEL_CKPT_FILE = ROOT_DIR + "/best_model.ckpt"         # file where to store the best checkpoint model
-    
-#    OPTUNA_STUDY_NAME    = "HP_search_denoisingAE"
     
 
 ##### VARIATIONAL AUTOENCODER ##### -------------------------------------------------------------------------
 
 class variationalAE():
     ROOT_DIR             = RESULTS_DIR + "/VariationalAutoencoder"
-    OPTUNA_DIR           = ROOT_DIR + "/OptunaStudy"
-    RECONSTRUCTIONS_DIR  = ROOT_DIR + "/ReconstructionExamples"  # directory to store reconstruction of images 
-    BEST_HYPERS_FILE     = ROOT_DIR + "/best_hypers.json"        # file where to store the best hyper-parameters obtained with optuna 
+    RECONSTRUCTIONS_DIR  = ROOT_DIR + "/ReconstructionExamples"  # directory to store reconstruction of images  
     BEST_MODEL_CKPT_FILE = ROOT_DIR + "/best_model.ckpt"         # file where to store the best checkpoint model
     
-    OPTUNA_STUDY_NAME    = "HP_search_variationalAE"
 

@@ -35,25 +35,25 @@ class DefaultDataset(Dataset):
 
 class AddGaussianNoise():
     """ Transform that add a gaussian noise with given mean and std with a certain probability.
-            prob : occurring probability of the transformation
+            p    : occurring probability of the transformation
             mean : mean of the gaussian noise
             std  : std of the gaussian noise
     """
-    def __init__(self, prob=0.5, mean=0., std=1.):
-        self.prob = prob
+    def __init__(self, p=0.5, mean=0., std=1.):
+        self.prob = p
         self.mean = mean
         self.std  = std
         
     def __call__(self, tensor):
         if torch.rand(1) < self.prob:
+            tensor = tensor.clone()
+            
             # generating and adding noise
             tensor += torch.randn(tensor.size())*self.std + self.mean
             
             # returning pixels values in range [0,1]
-            min_val = torch.min(tensor)
-            tensor -= min_val
-            max_val = torch.max(tensor)
-            tensor /= max_val
+            tensor = torch.clip(tensor, min=0., max=1.)
+
             return tensor
         else:
             return tensor

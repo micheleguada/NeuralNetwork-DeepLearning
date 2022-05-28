@@ -7,7 +7,6 @@ import os
 # pytorch imports
 import torchmetrics
 
-# DA SISTEMARE i docs strings ....... TODO TODO
 
 
 def plot_history(train, valid, figsize=(8,5), ylog=True, save_path=None):

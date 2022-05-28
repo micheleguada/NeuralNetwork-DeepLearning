@@ -19,7 +19,6 @@ import plotly.express as px
 
 import optuna.visualization as ov
 
-# DA SISTEMARE
 
 
 ##### Optuna optimization tools #####------------------------------------------------------------------------
@@ -117,9 +116,9 @@ class Objective(object):
     
 # decorator to add a function to a dictionary
 def make_decorator(dictionary):
-    def decorator_add_to_dict(key):
+    def decorator_add_to_dict():
         def wrapper(func):
-            dictionary.update({key:func})
+            dictionary.update({func.__name__:func})
             return func
         return wrapper
     return decorator_add_to_dict
@@ -128,7 +127,7 @@ class OptimizationInspector(object):
     """
     This class provides some plotting functions to analyze the outcome of an optuna study.
     """
-    # dict of plotting function
+    # dictionary of plotting function
     plot_dict = {}
     _plot_dict_member = make_decorator(plot_dict)
     
@@ -146,10 +145,14 @@ class OptimizationInspector(object):
         # ensure folder existence
         os.makedirs(self.save_path, exist_ok=True)
         
+    #def print_help(self):
         ## print dict of available plot functions
         #print("Available plot methods:")
         #for method in list(self.plot_dict):
             #print("   ", method)
+            
+        #print("Use the method 'plot_all' to run all the listed functions.")
+        #return
         
     def save_best_hypers_json(self, best_hypers_file):
         # save best hyperparameters to file (json)
@@ -196,18 +199,19 @@ class OptimizationInspector(object):
         return
     
     
-    def plot_all(self, parallel_sets = [], contour_sets = [], slice_sets = [],
+    def plot_all(self, parallel_sets = [], contour_sets = [], slice_sets = [], importance_params = [],
                  show = "100011000", save = True,
                 ):
         """
         Produce all the defined plots in this class (actually 9). Showing is controlled by the variable 'show'.
         It can also save all the plotted pictures. Files names are fixed to some default value.
          - show : binary string of lenght 9 ('1' to show image, '0' to not show).
-         - save : if to save the pictures on disk
+         - save : if to save the pictures on disk (bool)
         """
-        self.data_dict = {"parallel": parallel_sets,
-                          "contour" : contour_sets ,
-                          "slice"   : slice_sets   ,
+        self.data_dict = {"parallel"         : parallel_sets    ,
+                          "contour"          : contour_sets     ,
+                          "slice"            : slice_sets       ,
+                          "importance_params": importance_params,
                          }
         
         for idx,key in enumerate(self.plot_dict):
@@ -216,28 +220,32 @@ class OptimizationInspector(object):
                 continue
             self.plot_dict[key](self, show=show[idx], save=save)
             
+        self.data_dict = None
+            
         return
     
-    @_plot_dict_member("optimization_history") #1
+    @_plot_dict_member() #1
     def optimization_history(self, show="1", name="optimization_history", save=False):
         fig = ov.plot_optimization_history(self.study)
         fig.update_yaxes(type="log")
         self._handle_image(fig, show, name, save)
         return
     
-    @_plot_dict_member("intermediate_values") #2
+    @_plot_dict_member() #2
     def intermediate_values(self, show="1", name="intermediate_values", save=False):
         fig = ov.plot_intermediate_values(self.study)
         self._handle_image(fig, show, name, save)
         return
     
-    @_plot_dict_member("importances") #3
-    def importances(self, show="1", name="importances", save=False):
-        fig = ov.plot_param_importances(self.study)
+    @_plot_dict_member() #3
+    def importances(self, params=None, show="1", name="importances", save=False):
+        if self.data_dict is not None:
+            params = self.data_dict["importance_params"]
+        fig = ov.plot_param_importances(self.study, params=params)
         self._handle_image(fig, show, name, save)
         return
     
-    @_plot_dict_member("time_vs_value") #4
+    @_plot_dict_member() #4
     def time_vs_value(self, show="1", name="time_vs_value", save=False):  
         
         study_df = self.study.trials_dataframe()
@@ -262,7 +270,7 @@ class OptimizationInspector(object):
         self._handle_image(fig, show, name, save)
         return
         
-    @_plot_dict_member("latent_dim_vs_value") #5
+    @_plot_dict_member() #5
     def latent_dim_vs_value(self, show="1", name="latent_dim_vs_value", save=False):
 
         study_df  = self.study.trials_dataframe()
@@ -285,7 +293,7 @@ class OptimizationInspector(object):
         
         return
     
-    @_plot_dict_member("conv_vs_channels") #6
+    @_plot_dict_member() #6
     def conv_vs_channels(self, show="1", name="conv_vs_channels", save=False):
         
         study_df  = self.study.trials_dataframe()
@@ -315,7 +323,7 @@ class OptimizationInspector(object):
         
         return
     
-    @_plot_dict_member("parallel_plots") #7
+    @_plot_dict_member() #7
     def parallel_plots(self, parallel_sets=[], show="1", name="parallel", save=False):
         
         if self.data_dict is not None:
@@ -329,7 +337,7 @@ class OptimizationInspector(object):
 
         return
     
-    @_plot_dict_member("contour_plots") #8
+    @_plot_dict_member() #8
     def contour_plots(self, contour_sets=[], show="1", name="contour", save=False):
         
         if self.data_dict is not None:
@@ -343,7 +351,7 @@ class OptimizationInspector(object):
 
         return
     
-    @_plot_dict_member("slice_plots") #9
+    @_plot_dict_member() #9
     def slice_plots(self, slice_sets=[], show="1", name="slice", save=False):
         
         if self.data_dict is not None:

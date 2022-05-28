@@ -14,14 +14,13 @@ from autoencoder.components import Encoder, Decoder, BaseHPS, BasePLModule
 from autoencoder.components import get_activation, conv_output_shape, conv_transpose_output_shape
 
 
-# docs da completare ########  
-## da sistemare tutto qua DANGER
 
 
 ### Beta-Variational Autoencoder class with symmetric Encoder/Decoder pair ----------------------------------
 class VariationalAutoencoder(BasePLModule):    
     """
-    Autoencoder BUG BUG
+    Variational Autoencoder with symmetric Encoder/Decoder pair. It implements also the "beta" parameter to 
+    balance the reconstruction accuracy with disentanglement constraint.
     """    
     def __init__(self, 
                  input_size    : tuple, 
@@ -41,7 +40,7 @@ class VariationalAutoencoder(BasePLModule):
         self.save_hyperparameters() # save hyperparameters when checkpointing
         
         self.input_size = input_size
-        
+
         if params is None:
             # default hyper-parameters
             params = {"channels"        : [16, 32, 64], # number of feature maps 
@@ -54,7 +53,13 @@ class VariationalAutoencoder(BasePLModule):
                       "instance_norm"   : False,
                       "Pdropout"        : 0.,
                       "activation"      : "relu",
-                     } 
+                      "beta"            : 1.,
+                     }
+        self.beta = params["beta"]
+        
+        # normalize beta as:  beta*latent_dim / (C*W*H) . This is done in order to have the hyperparameter 
+        ### value independent from the samples sizes and of the chosen latent dimension.
+        self.beta_norm = params["beta"] * params["latent_space_dim"] / (np.prod(self.input_size))
                       
         self.enc_hp = params
         self.dec_hp = self._build_decoder_config(params)
@@ -71,39 +76,94 @@ class VariationalAutoencoder(BasePLModule):
                                      unflatten_dim = conv_shape, 
                                      out_padding   = out_padding,
                                     ) 
-           
-    def forward(self, x, additional_out=False):
-        z = self.encoder(x)
+        # latent space
+        self.latent_mu  = nn.Linear(params["linear_config"][-1], params["latent_space_dim"]) 
+        self.latent_var = nn.Linear(params["linear_config"][-1], params["latent_space_dim"]) 
+        
+    def _reparametrize(self, mu, log_var): 
+        if self.training:
+            std = torch.exp(0.5*log_var)
+            eps = torch.randn_like(std)
+            return mu + eps*std
+        else:
+            return mu     #reconstruction mode
+    
+    def forward(self, x):
+        h = self.encoder(x)
+        
+        mu       = self.latent_mu(h)
+        log_var  = self.latent_var(h)
+        z        = self._reparametrize(mu, log_var)
+        
         x_hat = self.decoder(z)
         return x_hat
     
-    def compute_loss(self, input, target):
-        return nn.functional.mse_loss(input=input, target=target)
+    def compute_loss(self, input, target, mu, log_var):    
+        # reconstruction loss
+        rec_loss_vec = nn.functional.mse_loss(input=input, target=target, reduction="none")  #shape: [batch_size, channels, W, H]
+        rec_loss = torch.mean(rec_loss_vec, dim=[1,2,3])   # shape: [batch_size, 1]
+        
+        # KL divergence
+        KL_div_vec = -0.5 * (1. + log_var - mu.pow(2) - log_var.exp())  #shape: [batch_size, latent_dim]
+        KL_div = torch.mean(KL_div_vec, dim=1)   # shape: [batch_size, 1]
+        
+        ### ELBO loss (Evidence Lower BOund): 
+        elbo = torch.mean(rec_loss + self.beta_norm * KL_div)
+        return elbo, torch.mean(rec_loss), torch.mean(KL_div)       
     
     def training_step(self, batch, batch_idx=None):
         orig, _ = batch
-        gen     = self(orig)  
         
-        train_loss = self.compute_loss(input=gen, target=orig)
-        self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True, prog_bar=True) 
+        # forward
+        hh      = self.encoder(orig)
+        mu      = self.latent_mu(hh)
+        log_var = self.latent_var(hh)
+        zz      = self._reparametrize(mu, log_var)
+        gen     = self.decoder(zz)
+        
+        train_loss, rec_loss, KL_loss = self.compute_loss(input=gen, target=orig, mu=mu, log_var=log_var)
+        self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True, prog_bar=True)
+        self.log("rec_loss"  , rec_loss.item()  , on_step=False, on_epoch=True)
+        self.log("KL_loss"   , KL_loss.item()   , on_step=False, on_epoch=True)
         return train_loss      
 
     def validation_step(self, batch, batch_idx=None):
         orig, _ = batch
-        gen     = self(orig)
         
-        val_loss = self.compute_loss(input=gen, target=orig)
+        # forward
+        hh      = self.encoder(orig)
+        mu      = self.latent_mu(hh)
+        log_var = self.latent_var(hh)
+        zz      = self._reparametrize(mu, log_var)
+        gen     = self.decoder(zz)
+        
+        val_loss, rec_loss, KL_loss = self.compute_loss(input=gen, target=orig, mu=mu, log_var=log_var)
         self.log("val_loss", val_loss.item(), on_step=False, on_epoch=True, prog_bar=True)
         return val_loss  
     
     def test_step(self, batch, batch_idx):
         # test loss
         orig, _ = batch
-        gen     = self(orig)
         
-        test_loss = self.compute_loss(input=gen, target=orig)
+        # forward
+        hh      = self.encoder(orig)
+        mu      = self.latent_mu(hh)
+        log_var = self.latent_var(hh)
+        zz      = self._reparametrize(mu, log_var)
+        gen     = self.decoder(zz)
+        
+        test_loss, rec_loss, KL_loss = self.compute_loss(input=gen, target=orig, mu=mu, log_var=log_var)
         self.log("test_loss", test_loss.item(), on_step=False, on_epoch=True) 
         return test_loss
+    
+    def get_latent_representation(self, x):
+        
+        assert not self.training
+        with torch.no_grad():
+            z       = self.encoder(x)
+            mu      = self.latent_mu(z)
+            log_var = self.latent_var(z)
+            return self._reparametrize(mu, log_var)
             
     
     def _compute_shapes(self):
@@ -192,6 +252,11 @@ class VariationalAutoencoderHPS(BaseHPS):
                                            )
         activation = trial.suggest_categorical("activation", self.hp_space["activations"])
         
+        beta       = trial.suggest_float("beta",
+                                         self.hp_space["beta_range"][0],
+                                         self.hp_space["beta_range"][1],
+                                        )
+        
         # build model hyperparameters dictionary
         params = {"channels"        : channels,
                   "conv_config"     : conv_config,
@@ -200,6 +265,7 @@ class VariationalAutoencoderHPS(BaseHPS):
                   "instance_norm"   : instance_norm,
                   "Pdropout"        : Pdropout,
                   "activation"      : activation,
+                  "beta"            : beta,
                  } 
         
         return params
