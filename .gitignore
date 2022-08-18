@@ -140,6 +140,7 @@ HW2-UnsupervisedLearning/Results/
 HW2-UnsupervisedLearning/TestDiCose.ipynb
 HW2-UnsupervisedLearning/Backup/
 HW2-UnsupervisedLearning/*.tar.gz
+HW2-UnsupervisedLearning/*.zip
 HW2-UnsupervisedLearning/Report/
 HW2-UnsupervisedLearning/Consegna/
 
@@ -150,3 +151,4 @@ HW3-ReinforcementLearning/Report/
 HW3-ReinforcementLearning/Consegna/
 HW3-ReinforcementLearning/CartPolePixels/
 HW3-ReinforcementLearning/dqn.pdf
+HW3-ReinforcementLearning/*.zip

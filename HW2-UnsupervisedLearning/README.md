@@ -11,3 +11,5 @@ The code is structured into three folders:
 
 The main script is implemented inside a jupyter-notebook (`Homework2-main.ipynb`), located in the main folder together with a *settings* file, `settings.py`. 
 This file contains the global seed number, GPU availability check and the path settings for all the output files.
+
+In the folder `AdditionalMedia` there are three animations produced by decoding the sequence of latent codes that constitutes a path along the centroids of each class. Animations are one for each AutoEncoder model.
