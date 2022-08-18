@@ -131,9 +131,22 @@ dmypy.json
 
 
 # my files to ignore
+jupyter_start.desktop
+jupyter_shortcut.bash
+
 HW2-UnsupervisedLearning/Datasets/
 HW2-UnsupervisedLearning/Checkpoints/
 HW2-UnsupervisedLearning/Results/
 HW2-UnsupervisedLearning/TestDiCose.ipynb
 HW2-UnsupervisedLearning/Backup/
 HW2-UnsupervisedLearning/*.tar.gz
+HW2-UnsupervisedLearning/Report/
+HW2-UnsupervisedLearning/Consegna/
+
+HW3-ReinforcementLearning/Backup/
+HW3-ReinforcementLearning/OptunaStudy/
+HW3-ReinforcementLearning/ProfileStudy/
+HW3-ReinforcementLearning/Report/
+HW3-ReinforcementLearning/Consegna/
+HW3-ReinforcementLearning/CartPolePixels/
+HW3-ReinforcementLearning/dqn.pdf

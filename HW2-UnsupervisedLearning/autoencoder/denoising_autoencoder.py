@@ -63,7 +63,7 @@ class DenoisingAutoencoder(SymmetricAutoencoder):
         self.log("train_loss", train_loss.item(), on_step=False, on_epoch=True, prog_bar=True) 
         return train_loss
     
-    def configure_corruption(self, transforms_list=None, prob=None, corruption=None):
+    def configure_corruption(self, transforms_list=None, prob=0.5, corruption=None):
         
         if corruption is not None:
             self.corrupt_transform = corruption

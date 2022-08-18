@@ -162,6 +162,11 @@ class OptimizationInspector(object):
         print("Best hyper-parameters saved to: '"+best_hypers_file+"'.")
     
     def _handle_image(self, fig, show, name, save):
+        # remove eventual title
+        fig.update_layout(title="",
+                          margin=dict(l=40, r=20, t=20, b=40),
+                         )
+        
         # function to plot/save images
         if show == "1":
             fig.show()
@@ -203,7 +208,7 @@ class OptimizationInspector(object):
                  show = "100011000", save = True,
                 ):
         """
-        Produce all the defined plots in this class (actually 9). Showing is controlled by the variable 'show'.
+        Produce all the defined plots in this class (by now 9). Showing is controlled by the variable 'show'.
         It can also save all the plotted pictures. Files names are fixed to some default value.
          - show : binary string of lenght 9 ('1' to show image, '0' to not show).
          - save : if to save the pictures on disk (bool)
@@ -257,7 +262,7 @@ class OptimizationInspector(object):
         # plot picture
         fig = px.scatter(study_df, 
                          x="time", y="value",
-                         labels     = {"time":"Training Time [min]", "value":"Min Validation Loss"},
+                         labels     = {"time":"Training Time [min]", "value":"Objective Value"},
                          color      = "state",
                          symbol     = "state",
                          hover_name = "name", 

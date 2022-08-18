@@ -2,15 +2,23 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data.dataset import Dataset, IterableDataset
 
 # python imports
 import numpy as np
+import random
+from collections import deque
 from abc import ABC, abstractmethod
 
 # additional libraries
 import pytorch_lightning as pl
 
 
+# custom modules
+from .utilities import get_activation, conv_output_shape
+
+
+######################## POLICY NETWORK #####################################################################
 
 ### Base blocks for model architecture ----------------------------------------------------------------------
 # convolutional block
@@ -21,7 +29,7 @@ class ConvBlock(nn.Module):
         - eventual instance normalization
         - activation function
     """
-    def __init__(self, input_channels, out_channels, config, instance_norm=False, activation="relu"):
+    def __init__(self, input_channels, out_channels, config, batch_norm=False, activation="relu"):
 
         super().__init__()
         
@@ -32,15 +40,15 @@ class ConvBlock(nn.Module):
                               padding      = config[2],
                              )
         # eventually add instance normalization
-        self.instance_norm = instance_norm
-        if self.instance_norm:
-            self.inst_norm = nn.InstanceNorm2d(out_channels)
+        self.batch_norm = batch_norm
+        if self.batch_norm:
+            self.batch_norm = nn.BatchNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.conv(x)
-        if self.instance_norm:
-            x = self.inst_norm(x)
+        if self.batch_norm:
+            x = self.batch_norm(x)
         x = self.act(x)
         return x
     
@@ -52,7 +60,7 @@ class ConvTransposeBlock(nn.Module):
         - eventual instance normalization
         - activation function
     """
-    def __init__(self, input_channels, out_channels, config, out_pad, instance_norm=False, activation="relu"):
+    def __init__(self, input_channels, out_channels, config, out_pad, batch_norm=False, activation="relu"):
 
         super().__init__()
         
@@ -64,15 +72,15 @@ class ConvTransposeBlock(nn.Module):
                                          output_padding = out_pad,
                                         )
         # eventually add instance normalization
-        self.instance_norm = instance_norm
-        if self.instance_norm:
-            self.inst_norm = nn.InstanceNorm2d(out_channels)
+        self.batch_norm = batch_norm
+        if self.batch_norm:
+            self.batch_norm = nn.BatchNorm2d(out_channels)
         self.act = get_activation(activation)
         
     def forward(self, x, additional_out=False):
         x = self.deconv(x)
-        if self.instance_norm:
-            x = self.inst_norm(x)
+        if self.batch_norm:
+            x = self.batch_norm(x)
         x = self.act(x)
         return x
     
@@ -102,130 +110,96 @@ class LinearBlock(nn.Module):
             x = self.drp(x)
         x = self.act(x)
         return x
-        
-        
-        
-        
-### encoder/decoder classes ---------------------------------------------------------------------------------
-# Encoder
-class Encoder(nn.Module):
-    """
-    Convolutional Encoder:
-        input_size : size of input image (channels, width, height)
-        params     : dictionary containing hyper-parameters of the model
-        flatten_dim: units of the flatten layer
-        
-    N.B.: Latent space is not included in the encoder. This way we can use this encoder with standard and
-          variational autoencoder models.
-    """
-    def __init__(self, input_size, params, flatten_dim):
-        super().__init__()
+    
 
-        self.input_size = input_size
-        self.hp = params # hyper-parameters
-            
-        ### convolutional layers
-        channels = input_size[0] # first layer input channels (1 or 3)
+### policy network class ------------------------------------------------------------------------------------
+class PolicyNetwork(nn.Module):
+    
+    def __init__(self, 
+                 state_space_dim, 
+                 action_space_dim,
+                 params = None, 
+                ):
+        super().__init__()
         
+        if params is None:
+            conv_channels = [16,32,32]
+            linear_units  = [256]
+            activation    = "tanh"
+            batch_norm    = True
+            dropout       = 0.
+            conv_config   = [[5,2,0],  
+                             [5,2,0],
+                             [3,2,1],
+                            ]
+        else:
+            conv_channels = params["conv_channels"]
+            linear_units  = params["linear_units"]
+            activation    = params["activation"]
+            batch_norm    = params["batch_norm"]
+            dropout       = params["dropout"]
+            conv_config   = params["conv_config"]
+        
+        self.state_space_dim = state_space_dim        
+        
+        # activation
+        self.act = get_activation(activation)
+        
+        ### convolutional layers
+        self.conv_channels = conv_channels
+        # layers configurations
+        self.conv_config = conv_config
+                           
+        channels = state_space_dim[0] # first layer input channels (1 or 3)
         conv_list = []
-        for idx,values in enumerate(self.hp["conv_config"]):
-            out_channels = self.hp["channels"][idx]
-            conv_list.append( ConvBlock(channels, out_channels, values, 
-                                        self.hp["instance_norm"], self.hp["activation"],
+        for idx, out_channels in enumerate(conv_channels):
+            conv_list.append( ConvBlock(channels, out_channels, self.conv_config[idx], 
+                                        batch_norm, activation,
                             )          )
             channels = out_channels # redefine the number of input channels for the next layer
             
-        self.encoder_cnn = nn.Sequential(*conv_list)
+        self.policy_cnn = nn.Sequential(*conv_list)
         
         ### flatten layer
         self.flatten = nn.Flatten(start_dim=1)
         
         ### linear layers
-        in_units = flatten_dim #number of input units needed after the flatten layer
-            
+        in_units = self._compute_flatten_dim(self.state_space_dim,  #number of input units needed after the flatten layer
+                                             self.conv_config, 
+                                             self.conv_channels,
+                                            )
         linear_list = []
-        for value in self.hp["linear_config"]:
-            linear_list.append( LinearBlock(in_units, value, self.hp["Pdropout"], self.hp["activation"]) )
-            
+        for value in linear_units:
+            linear_list.append( LinearBlock(in_units, value, dropout, activation) )
             in_units = value # redefine the number of input units for the next layer
-        
-        self.encoder_lin = nn.Sequential(*linear_list)
             
-    def forward(self, x, additional_out=False):
-        x = self.encoder_cnn(x)  # convolutions
+        # append last linear layer
+        linear_list.append( nn.Linear(in_units, action_space_dim) )
+        
+        self.policy_lin = nn.Sequential(*linear_list)
+
+    def forward(self, x):
+        
+        x = self.policy_cnn(x)  # convolutions
         x = self.flatten(x)
-        x = self.encoder_lin(x)  # linear layers
-        return x
-        
-# Decoder
-class Decoder(nn.Module):
-    """
-    Convolutional Decoder:
-        out_size     : size of decoded image (equal to input image size) (width, height, channels)
-        params       : dictionary containing hyper-parameters of the model.
-        unflatten_dim: input shape at the first deconvolutional layer (tuple)
-    """
-    def __init__(self, out_size, params, unflatten_dim, out_padding):
-
-        super().__init__()
-
-        self.out_size = out_size
-        self.hp = params # hyper-parameters
-        
-        ### linear layers
-        in_units = self.hp["latent_space_dim"]
-            
-        linear_list = []
-        for value in self.hp["linear_config"]:
-            linear_list.append( LinearBlock(in_units, value, self.hp["Pdropout"], self.hp["activation"]) )
-            
-            in_units = value # redefine the number of input units for the next layer
-        
-        # append flatten linear block
-        linear_list.append( LinearBlock(in_units, 
-                                        np.prod(unflatten_dim), 
-                                        self.hp["Pdropout"], 
-                                        self.hp["activation"],
-                          )            )
-        
-        self.decoder_lin = nn.Sequential(*linear_list)
-        
-        ### unflatten layer
-        self.unflatten = nn.Unflatten(dim=1, unflattened_size=unflatten_dim)
-        
-        ### deconvolutional layers        
-        deconv_list = []       
-        for idx,values in enumerate(self.hp["conv_config"][:-1]):
-            in_channels  = self.hp["channels"][idx]
-            out_channels = self.hp["channels"][idx+1]
-            deconv_list.append( ConvTransposeBlock(in_channels, out_channels, values, out_padding[idx],
-                                                   self.hp["instance_norm"], self.hp["activation"],
-                              )                   )
-        # append last deconvolutional layer
-        deconv_list.append( nn.ConvTranspose2d(in_channels  = self.hp["channels"][-1],
-                                               out_channels = self.out_size[0], # image channels (1 or 3) 
-                                               kernel_size  = self.hp["conv_config"][-1][0], 
-                                               stride       = self.hp["conv_config"][-1][1], 
-                                               padding      = self.hp["conv_config"][-1][2], 
-                                               output_padding = out_padding[-1],
-                          )                   )
-        # append sigmoid layer at the end to ensure proper range for pixels values
-        deconv_list.append( nn.Sigmoid() )
-        
-        self.decoder_cnn = nn.Sequential(*deconv_list)
-
-    def forward(self, x, additional_out=False):
-        
-        x = self.decoder_lin(x) #linear layers
-        x = self.unflatten(x)
-        x = self.decoder_cnn(x) #deconvolutional layers
-        
+        x = self.policy_lin(x)  # linear layers
         return x
     
-    
-    
-    
-    
+    def _compute_flatten_dim(self, shape, conv_config, conv_channels):
+        """Keep trace of the image size through conv. layers """
+        intermediate_shapes = [(shape[1], shape[2])]        
+        for kk, values in enumerate(conv_config):
+            intermediate_shapes.append(conv_output_shape(intermediate_shapes[kk],   # (W,H)
+                                                         values[0], # kernel size
+                                                         values[1], # stride
+                                                         values[2], # padding
+                                      )                 )
+        channels   = conv_channels[-1]
+        to_flatten = intermediate_shapes[-1]
+        
+        return np.prod( (channels, to_flatten[0], to_flatten[1]) )
+
+
 ### Abstract classes ----------------------------------------------------------------------------------------
 # Base abstract module     
 class BasePLModule(ABC, pl.LightningModule):
@@ -349,63 +323,4 @@ class BaseHPS(ABC):
                
         return learning_rate
         
-        
-
-### some utility functions ----------------------------------------------------------------------------------
-# activation function from name
-def get_activation(act):
-    if act == "relu":
-        return nn.ReLU(inplace=True)
-    elif act == "leaky_relu":
-        return nn.LeakyReLU(inplace=True)
-    elif act == "silu":
-        return nn.SiLU(inplace=True)   #sigmoid linear unit
-    elif act == "tanh":
-        return nn.Tanh()
-    elif act == "sigmoid":
-        return nn.Sigmoid()
-    else: 
-        raise ValueError(f"Activation {act} is currently not supported.")
-        
-# convolutional layer output shape
-def conv_output_shape(input_shape, kernel_size=1, stride=1, pad=0, dilation=1):
-    """
-    Utility function that computes the output of a convolutional or pooling layer for 
-    a given rectangular input shape (tuple of integers with 'Width' and 'Height' in pixels). 
-    Note that:    
-        - shape of kernel is assumed to be square.
-        - stride, padding and dilation are assumed to be symmetric.
-    """
-    dim1 = int( ((input_shape[0] + (2*pad) - (dilation*(kernel_size-1)) -1 )/ stride) +1 )
-    dim2 = int( ((input_shape[1] + (2*pad) - (dilation*(kernel_size-1)) -1 )/ stride) +1 )
-    return (dim1, dim2)
-
-# transpose convolutional layer output shape
-def conv_transpose_output_shape(input_shape, kernel_size=1, stride=1, pad=0, dilation=1, out_padding=(0,0)):
-    """
-    Utility function that computes the output of a transpose convolutional layer for 
-    a given rectangular input shape (tuple of integers with 'Width' and 'Height' in pixels). 
-    Note that:    
-        - shape of kernel is assumed to be square.
-        - stride, padding and dilation are assumed to be symmetric.
-    """
-    dim1 = int( (input_shape[0]-1)*stride - 2*pad + dilation*(kernel_size-1) + out_padding[0] +1 )
-    dim2 = int( (input_shape[1]-1)*stride - 2*pad + dilation*(kernel_size-1) + out_padding[1] +1 )
-    return (dim1, dim2)
-
-
-# print shape of image through convolutional layers
-def print_conv_shapes(input_shape, config):
-    """
-    Utility function that computes and prints the shape of image through the convolutional layers.
-    """    
-    shape = input_shape
-    shapes = [shape]
-    for layer in config:
-        shape = conv_output_shape(shape, layer[0], layer[1], layer[2])
-        shapes.append( shape )
-        
-    print("  ", " -> ".join([str(item) for item in shapes]))
-    
-    return shapes
- 
+  
